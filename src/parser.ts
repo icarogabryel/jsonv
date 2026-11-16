@@ -42,6 +42,12 @@ interface VariableReference {
   scope: Scope;
 }
 
+export interface JsonvWarning {
+  code: "UNUSED_VARIABLE";
+  message: string;
+  variable: string;
+}
+
 export class Parser {
   private position = 0;
   private output = "";
@@ -55,7 +61,11 @@ export class Parser {
   private referenceCounter = 0;
   private readonly references: VariableReference[] = [];
 
-  constructor(private readonly source: string) {
+  constructor(
+    private readonly source: string,
+    private readonly onWarning: (warning: JsonvWarning) => void = (warning) =>
+      console.warn(warning.message),
+  ) {
     this.currentToken = this.readToken();
   }
 
@@ -281,7 +291,11 @@ export class Parser {
     for (const scope of this.scopes) {
       for (const symbol of scope.symbols.values()) {
         if (!symbol.used) {
-          console.warn(`Unused variable '${symbol.name}'`);
+          this.onWarning({
+            code: "UNUSED_VARIABLE",
+            message: `Unused variable '${symbol.name}'`,
+            variable: symbol.name,
+          });
         }
       }
     }

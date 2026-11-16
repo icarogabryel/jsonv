@@ -136,9 +136,9 @@ jsonv input.jsonv --output output.json
 The package will also expose a programmatic API.
 
 ```typescript
-import { parse } from "jsonv";
+import { parse, parseFile } from "jsonv";
 
-const result = parse(`
+const output = parse(`
 {
   $color: "#555",
   button: {
@@ -146,6 +146,18 @@ const result = parse(`
   }
 }
 `);
+
+const fileOutput = await parseFile("./config.jsonv");
+```
+
+Warnings for unused variables can be customized through `onWarning`:
+
+```typescript
+const output = parse(source, {
+  onWarning(warning) {
+    console.warn(warning.message);
+  },
+});
 ```
 
 ## Project Structure

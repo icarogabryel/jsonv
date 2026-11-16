@@ -30,8 +30,8 @@
 
 - [x] Implement the JSONV parsing API.
 - [x] Accept JSONV source strings.
-- [ ] Provide structured parsing and resolution errors.
-- [ ] Export the public API through the package entry point.
+- [x] Provide structured parsing and resolution errors.
+- [x] Export the public API through the package entry point.
 
 ## 4. CLI
 
