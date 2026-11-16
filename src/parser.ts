@@ -119,6 +119,7 @@ export class Parser {
       }
 
       let previousMemberWasVariableOnlyLine = this.parseMember();
+      let hasRegularMember = !previousMemberWasVariableOnlyLine;
 
       while (this.getCurrentTokenKind() === "COMMA") {
         const previousOutput = this.output;
@@ -138,10 +139,13 @@ export class Parser {
             previousOutput + trivia.replace(/^[ \t]*\r?\n[ \t]*/, "");
         } else if (this.getCurrentTokenKind() === "VARIABLE") {
           const trivia = this.output.slice(triviaStart);
-          this.output = previousOutput + trivia;
+          this.output =
+            previousOutput + (hasRegularMember ? "," : "") + trivia;
         }
 
         previousMemberWasVariableOnlyLine = this.parseMember();
+        hasRegularMember =
+          hasRegularMember || !previousMemberWasVariableOnlyLine;
       }
 
       const triviaStart = this.output.length;
