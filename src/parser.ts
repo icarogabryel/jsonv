@@ -22,10 +22,36 @@ interface Token {
   position: number;
 }
 
+type SymbolState = "unresolved" | "resolving" | "resolved";
+
+interface VariableSymbol {
+  name: string;
+  value: string | undefined;
+  state: SymbolState;
+}
+
+interface Scope {
+  parent: Scope | undefined;
+  symbols: Map<string, VariableSymbol>;
+}
+
+interface VariableReference {
+  placeholder: string;
+  name: string;
+  scope: Scope;
+}
+
 export class Parser {
   private position = 0;
   private output = "";
   private currentToken: Token;
+  private readonly rootScope: Scope = {
+    parent: undefined,
+    symbols: new Map(),
+  };
+  private currentScope = this.rootScope;
+  private referenceCounter = 0;
+  private readonly references: VariableReference[] = [];
 
   constructor(private readonly source: string) {
     this.currentToken = this.readToken();
@@ -42,7 +68,7 @@ export class Parser {
 
     this.expect("EOF");
 
-    return this.output;
+    return this.resolveOutput();
   }
 
   private parseValue(): void {
@@ -57,9 +83,13 @@ export class Parser {
         this.parseArray();
         break;
 
+      case "VARIABLE":
+        this.resolveVariable(this.currentToken.value);
+        this.advance();
+        break;
+
       case "STRING":
       case "NUMBER":
-      case "VARIABLE":
       case "TRUE":
       case "FALSE":
       case "NULL":
@@ -74,42 +104,206 @@ export class Parser {
 
   private parseObject(): void {
     this.expect("LEFT_BRACE");
-    this.skipTrivia();
+    const parentScope = this.currentScope;
+    this.currentScope = {
+      parent: parentScope,
+      symbols: new Map(),
+    };
 
-    if (this.currentToken.kind === "RIGHT_BRACE") {
-      this.advance();
-      return;
-    }
-
-    this.parseMember();
-
-    while (this.currentToken.kind === "COMMA") {
-      this.expect("COMMA");
+    try {
       this.skipTrivia();
-      this.parseMember();
-    }
 
-    this.skipTrivia();
-    this.expect("RIGHT_BRACE");
+      if (this.getCurrentTokenKind() === "RIGHT_BRACE") {
+        this.expect("RIGHT_BRACE");
+        return;
+      }
+
+      let previousMemberWasVariableOnlyLine = this.parseMember();
+
+      while (this.getCurrentTokenKind() === "COMMA") {
+        const previousOutput = this.output;
+
+        if (previousMemberWasVariableOnlyLine) {
+          this.expectWithoutWrite("COMMA");
+        } else {
+          this.expect("COMMA");
+        }
+
+        const triviaStart = this.output.length;
+        this.skipTrivia();
+
+        if (previousMemberWasVariableOnlyLine) {
+          const trivia = this.output.slice(triviaStart);
+          this.output =
+            previousOutput + trivia.replace(/^[ \t]*\r?\n[ \t]*/, "");
+        } else if (this.getCurrentTokenKind() === "VARIABLE") {
+          const trivia = this.output.slice(triviaStart);
+          this.output = previousOutput + trivia;
+        }
+
+        previousMemberWasVariableOnlyLine = this.parseMember();
+      }
+
+      const triviaStart = this.output.length;
+      this.skipTrivia();
+
+      if (previousMemberWasVariableOnlyLine) {
+        const trivia = this.output.slice(triviaStart);
+        this.output =
+          this.output.slice(0, triviaStart) +
+          trivia.replace(/^[ \t]*\r?\n[ \t]*/, "");
+      }
+
+      this.expect("RIGHT_BRACE");
+    } finally {
+      this.currentScope = parentScope;
+    }
   }
 
-  private parseMember(): void {
+  private parseMember(): boolean {
     this.skipTrivia();
 
-    if (
-      this.currentToken.kind !== "STRING" &&
-      this.currentToken.kind !== "VARIABLE"
-    ) {
+    const isVariable = this.currentToken.kind === "VARIABLE";
+    const variableStart = this.currentToken.position;
+
+    if (!isVariable && this.currentToken.kind !== "STRING") {
       this.throwUnexpectedToken();
     }
 
-    this.write(this.currentToken.value);
-    this.advance();
+    const name = this.currentToken.value;
 
+    if (!isVariable) {
+      this.write(name);
+    }
+
+    this.advance();
     this.skipTrivia();
+
+    if (isVariable) {
+      this.expectWithoutWrite("COLON");
+      if (this.currentScope.symbols.has(name)) {
+        throw new SyntaxError(`Duplicate variable '${name}' in the same scope`);
+      }
+
+      const symbol: VariableSymbol = {
+        name,
+        value: undefined,
+        state: "unresolved",
+      };
+      this.currentScope.symbols.set(name, symbol);
+      symbol.value = this.parseSymbolValue();
+
+      const isOnlyLine = this.isVariableOnlyLine(
+        variableStart,
+        this.currentToken.position,
+      );
+
+      if (isOnlyLine) {
+        this.removeCurrentLineIndent();
+      }
+
+      return isOnlyLine;
+    }
 
     this.expect("COLON");
     this.parseValue();
+    return false;
+  }
+
+  private isVariableOnlyLine(
+    variableStart: number,
+    valueEnd: number,
+  ): boolean {
+    const lineStart = this.source.lastIndexOf("\n", variableStart) + 1;
+    const lineEnd = this.source.indexOf("\n", valueEnd);
+    const end = lineEnd === -1 ? this.source.length : lineEnd;
+    const prefix = this.source.slice(lineStart, variableStart);
+    const suffix = this.source.slice(valueEnd, end);
+
+    return (
+      /^[ \t]*$/.test(prefix) &&
+      /^[ \t]*(?:,[ \t]*)?\r?$/.test(suffix)
+    );
+  }
+
+  private removeCurrentLineIndent(): void {
+    const lineStart = this.output.lastIndexOf("\n") + 1;
+    const indent = this.output.slice(lineStart);
+
+    if (/^[ \t]*$/.test(indent)) {
+      this.output = this.output.slice(0, lineStart);
+    }
+  }
+
+  private resolveOutput(): string {
+    let output = this.output;
+
+    for (const reference of this.references) {
+      if (output.includes(reference.placeholder)) {
+        output = output.replaceAll(
+          reference.placeholder,
+          this.resolveReference(reference),
+        );
+      }
+    }
+
+    return output;
+  }
+
+  private resolveReference(reference: VariableReference): string {
+    const symbol = this.findSymbol(reference.scope, reference.name);
+
+    if (symbol === undefined) {
+      throw new SyntaxError(`Undefined variable '${reference.name}'`);
+    }
+
+    return this.resolveSymbol(symbol);
+  }
+
+  private resolveSymbol(symbol: VariableSymbol): string {
+    if (symbol.state === "resolving") {
+      throw new SyntaxError(`Circular reference involving '${symbol.name}'`);
+    }
+
+    if (symbol.state === "resolved") {
+      if (symbol.value === undefined) {
+        throw new SyntaxError(`Undefined variable '${symbol.name}'`);
+      }
+
+      return symbol.value;
+    }
+
+    if (symbol.value === undefined) {
+      throw new SyntaxError(`Undefined variable '${symbol.name}'`);
+    }
+
+    symbol.state = "resolving";
+    let value = symbol.value;
+
+    for (const reference of this.references) {
+      if (value.includes(reference.placeholder)) {
+        value = value.replaceAll(
+          reference.placeholder,
+          this.resolveReference(reference),
+        );
+      }
+    }
+
+    symbol.value = value;
+    symbol.state = "resolved";
+
+    return value;
+  }
+
+  private findSymbol(
+    scope: Scope | undefined,
+    name: string,
+  ): VariableSymbol | undefined {
+    if (scope === undefined) {
+      return undefined;
+    }
+
+    return scope.symbols.get(name) ?? this.findSymbol(scope.parent, name);
   }
 
   private parseArray(): void {
@@ -130,6 +324,18 @@ export class Parser {
 
     this.skipTrivia();
     this.expect("RIGHT_BRACKET");
+  }
+
+  private expectWithoutWrite(kind: TokenKind): void { // TODO: Needed?
+    if (this.currentToken.kind !== kind) {
+      this.throwUnexpectedToken();
+    }
+
+    this.advance();
+  }
+
+  private getCurrentTokenKind(): TokenKind {  // TODO: Needed?
+    return this.currentToken.kind;
   }
 
   // Lexer
@@ -204,6 +410,18 @@ export class Parser {
     throw new SyntaxError(`Unexpected character at ${start}`);
   }
 
+  private parseSymbolValue(): string {
+    const previousOutput = this.output;
+    this.output = "";
+
+    this.parseValue();
+
+    const value = this.output;
+    this.output = previousOutput;
+
+    return value;
+  }
+
   // Token handling
 
   private advance(): void {
@@ -236,5 +454,16 @@ export class Parser {
     throw new SyntaxError(
       `Unexpected token '${value || kind}' at position ${position}`,
     );
+  }
+
+  private resolveVariable(name: string): void {
+    const placeholder = `\u0000jsonv-reference-${this.referenceCounter++}\u0000`;
+
+    this.references.push({
+      placeholder,
+      name,
+      scope: this.currentScope,
+    });
+    this.write(placeholder);
   }
 }
