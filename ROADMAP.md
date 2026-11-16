@@ -8,7 +8,7 @@
 
 - [X] Parse JSONC documents.
 - [X] Support JSONC comments.
-- [ ] Support trailing commas.
+- [x] Support trailing commas.
 - [X] Detect and report syntax errors.
 
 ## 2. Variables
@@ -30,7 +30,6 @@
 
 - [x] Implement the JSONV parsing API.
 - [x] Accept JSONV source strings.
-- [ ] Return standard JavaScript values.
 - [ ] Provide structured parsing and resolution errors.
 - [ ] Export the public API through the package entry point.
 

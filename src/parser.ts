@@ -137,6 +137,16 @@ export class Parser {
         const triviaStart = this.output.length;
         this.skipTrivia();
 
+        if (this.getCurrentTokenKind() === "RIGHT_BRACE") {
+          if (previousMemberWasVariableOnlyLine) {
+            const trivia = this.output.slice(triviaStart);
+            this.output =
+              previousOutput + trivia.replace(/^[ \t]*\r?\n[ \t]*/, "");
+          }
+
+          break;
+        }
+
         if (previousMemberWasVariableOnlyLine) {
           const trivia = this.output.slice(triviaStart);
           this.output =
@@ -338,7 +348,7 @@ export class Parser {
     this.expect("LEFT_BRACKET");
     this.skipTrivia();
 
-    if (this.currentToken.kind === "RIGHT_BRACKET") {
+    if (this.getCurrentTokenKind() === "RIGHT_BRACKET") {
       this.advance();
       return;
     }
@@ -347,6 +357,12 @@ export class Parser {
 
     while (this.currentToken.kind === "COMMA") {
       this.expect("COMMA");
+      this.skipTrivia();
+
+      if (this.getCurrentTokenKind() === "RIGHT_BRACKET") {
+        break;
+      }
+
       this.parseValue();
     }
 
