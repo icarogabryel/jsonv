@@ -28,6 +28,7 @@ interface VariableSymbol {
   name: string;
   value: string | undefined;
   state: SymbolState;
+  used: boolean;
 }
 
 interface Scope {
@@ -49,6 +50,7 @@ export class Parser {
     parent: undefined,
     symbols: new Map(),
   };
+  private readonly scopes: Scope[] = [this.rootScope];
   private currentScope = this.rootScope;
   private referenceCounter = 0;
   private readonly references: VariableReference[] = [];
@@ -105,10 +107,12 @@ export class Parser {
   private parseObject(): void {
     this.expect("LEFT_BRACE");
     const parentScope = this.currentScope;
-    this.currentScope = {
+    const objectScope: Scope = {
       parent: parentScope,
       symbols: new Map(),
     };
+    this.scopes.push(objectScope);
+    this.currentScope = objectScope;
 
     try {
       this.skipTrivia();
@@ -193,6 +197,7 @@ export class Parser {
         name,
         value: undefined,
         state: "unresolved",
+        used: false,
       };
       this.currentScope.symbols.set(name, symbol);
       symbol.value = this.parseSymbolValue();
@@ -242,6 +247,12 @@ export class Parser {
   private resolveOutput(): string {
     let output = this.output;
 
+    for (const scope of this.scopes) {
+      for (const symbol of scope.symbols.values()) {
+        this.resolveSymbol(symbol);
+      }
+    }
+
     for (const reference of this.references) {
       if (output.includes(reference.placeholder)) {
         output = output.replaceAll(
@@ -251,7 +262,19 @@ export class Parser {
       }
     }
 
+    this.warnUnusedSymbols();
+
     return output;
+  }
+
+  private warnUnusedSymbols(): void {
+    for (const scope of this.scopes) {
+      for (const symbol of scope.symbols.values()) {
+        if (!symbol.used) {
+          console.warn(`Unused variable '${symbol.name}'`);
+        }
+      }
+    }
   }
 
   private resolveReference(reference: VariableReference): string {
@@ -261,6 +284,7 @@ export class Parser {
       throw new SyntaxError(`Undefined variable '${reference.name}'`);
     }
 
+    symbol.used = true;
     return this.resolveSymbol(symbol);
   }
 

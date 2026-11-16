@@ -23,7 +23,8 @@
 - [x] Use the containing object scope for array elements.
 - [x] Exclude variable declarations from the final output.
 - [x] Detect undefined variable references.
-- [ ] Detect circular references.
+- [x] Detect circular references.
+- [x] Warn about unused variable declarations.
 
 ## 3. Public API
 
